@@ -41,6 +41,8 @@ export default function App() {
     { timestamp: '03:25:04', message: 'JARVIS ENGINE IS LIVE AND LISTENING FOR COMMANDS...', level: 'info' },
   ])
 
+  const [liveSubtitle, setLiveSubtitle] = useState<{ speaker: 'user' | 'nyota'; text: string } | null>(null)
+
   const addLog = useCallback((message: string, level: LogEntry['level'] = 'info') => {
     const timestamp = new Date().toLocaleTimeString()
     setLogs((prev) => [...prev, { timestamp, message, level }])
@@ -53,7 +55,7 @@ export default function App() {
       addLog(`[MIC]: Listening to voice input channel...`, 'info')
       playCyberSound('beep')
     } else if (mode === 'thinking') {
-      addLog(`[GEMINI]: Querying LLM API endpoints...`, 'info')
+      addLog(`[AI]: Processing request...`, 'info')
     } else if (mode === 'speaking') {
       addLog(`[SAPI5]: Translating message response to voice output...`, 'success')
       playCyberSound('speak')
@@ -156,9 +158,11 @@ export default function App() {
       
       // Update logs with transcription and voice response
       addLog(`[USER] (Voice): "${data.user_query}"`, 'info')
+      setLiveSubtitle({ speaker: 'user', text: data.user_query })
       
       const replyToShow = data.reply.includes('|') ? data.reply.split('|')[0].trim() : data.reply
       addLog(`[NYOTA] (Voice): "${replyToShow}"`, 'success')
+      setLiveSubtitle({ speaker: 'nyota', text: replyToShow })
       
       // Calculate speaking duration dynamically based on spoken translation (English part after |)
       const spokenText = data.reply.includes('|') ? data.reply.split('|')[1].trim() : data.reply
@@ -179,7 +183,7 @@ export default function App() {
 
     } catch {
       clearTimeout(thinkingTimeout)
-      addLog(`[ERROR]: Failed to capture voice stream or query Gemini.`, 'error')
+      addLog(`[ERROR]: Failed to capture voice stream or query AI.`, 'error')
       
       isLoopRunningRef.current = false
       setTimeout(() => {
@@ -237,6 +241,7 @@ export default function App() {
 
   const handleSubmitPrompt = useCallback(async (value: string) => {
     addLog(`[USER]: "${value}"`, 'info')
+    setLiveSubtitle({ speaker: 'user', text: value })
     await interruptSpeech() // Stop speaking if they submit a new query
     handleSetState('thinking')
 
@@ -247,6 +252,7 @@ export default function App() {
       }
       const replyToShow = data.reply.includes('|') ? data.reply.split('|')[0].trim() : data.reply
       addLog(`[NYOTA]: "${replyToShow}"`, 'success')
+      setLiveSubtitle({ speaker: 'nyota', text: replyToShow })
       
       // Calculate speaking duration dynamically based on spoken translation (English part after |)
       const spokenText = data.reply.includes('|') ? data.reply.split('|')[1].trim() : data.reply
@@ -320,14 +326,26 @@ export default function App() {
         <section className="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#04060b]">
           {activeTab === 'visualizer' && viewMode === 'immersive' && (
             <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
-              <ArcReactor state={state} onTriggerVoice={handleTriggerVoice} onSetState={handleSetState} handsFree={handsFree} />
+              <ArcReactor
+                state={state}
+                onTriggerVoice={handleTriggerVoice}
+                onSetState={handleSetState}
+                handsFree={handsFree}
+                liveSubtitle={liveSubtitle}
+              />
               <ActionStream logs={logs} />
             </div>
           )}
 
           {activeTab === 'visualizer' && viewMode === 'split' && (
             <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
-              <ArcReactor state={state} onTriggerVoice={handleTriggerVoice} onSetState={handleSetState} handsFree={handsFree} />
+              <ArcReactor
+                state={state}
+                onTriggerVoice={handleTriggerVoice}
+                onSetState={handleSetState}
+                handsFree={handsFree}
+                liveSubtitle={liveSubtitle}
+              />
               <TerminalLogs logs={logs}>
                 <ApprovalPanel pendingApproval={pendingApproval} onApproval={handleApproval} />
                 <CommandInput onSubmit={handleSubmitPrompt} />

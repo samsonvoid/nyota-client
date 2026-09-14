@@ -13,6 +13,200 @@ import LeadsTab from './components/LeadsTab/LeadsTab'
 import AuditorTab from './components/AuditorTab/AuditorTab'
 import { api } from './lib/api'
 
+// Hologram background types
+interface SnowParticle { x: number; y: number; size: number; speedY: number; driftX: number; opacity: number }
+interface BeaconNode { x: number; y: number; size: number; offset: number }
+
+function HologramBackground() {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const mouseRef = useRef({ x: -1000, y: -1000 })
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight }
+    resize()
+    window.addEventListener('resize', resize)
+
+    const snowParticles: SnowParticle[] = Array.from({ length: 65 }, () => ({
+      x: Math.random() * window.innerWidth,
+      y: Math.random() * window.innerHeight,
+      size: Math.random() * 2 + 0.8,
+      speedY: Math.random() * 0.8 + 0.3,
+      driftX: Math.sin(Math.random() * Math.PI) * 0.3,
+      opacity: Math.random() * 0.6 + 0.2,
+    }))
+    const beaconNodes: BeaconNode[] = [
+      { x: 0.15, y: 0.25, size: 3.5, offset: 0 },
+      { x: 0.85, y: 0.20, size: 4.0, offset: 2 },
+      { x: 0.10, y: 0.80, size: 3.0, offset: 4 },
+      { x: 0.88, y: 0.75, size: 3.8, offset: 1 },
+      { x: 0.50, y: 0.15, size: 4.5, offset: 3 },
+    ]
+
+    const handleMouseMove = (e: MouseEvent) => { mouseRef.current.x = e.clientX; mouseRef.current.y = e.clientY }
+    const handleMouseLeave = () => { mouseRef.current.x = -1000; mouseRef.current.y = -1000 }
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseleave', handleMouseLeave)
+
+    let step = 0
+    const draw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      const cx = canvas.width / 2
+      const cy = canvas.height / 2
+      step += 0.018
+
+      // Ambient radial glow
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, canvas.width * 0.5)
+      grad.addColorStop(0, 'rgba(0, 255, 170, 0.03)')
+      grad.addColorStop(0.7, 'rgba(0, 206, 209, 0.015)')
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)')
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+      // Data snow
+      snowParticles.forEach(p => {
+        const dx = mouseRef.current.x - p.x
+        const dy = mouseRef.current.y - p.y
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        if (dist < 110) { p.x -= (dx / dist) * 5; p.y -= (dy / dist) * 5 }
+        ctx.fillStyle = `rgba(0, 255, 170, ${p.opacity})`
+        ctx.shadowBlur = 4
+        ctx.shadowColor = 'rgba(0, 255, 170, 0.8)'
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill()
+        p.y += p.speedY; p.x += Math.sin(step + p.y * 0.01) * p.driftX
+        if (p.y > canvas.height) { p.y = -10; p.x = Math.random() * canvas.width }
+      })
+
+      // Mouse trail
+      if (mouseRef.current.x > 0) {
+        for (let i = 0; i < 2; i++) {
+          const tp = { x: mouseRef.current.x + (Math.random() - 0.5) * 10, y: mouseRef.current.y + (Math.random() - 0.5) * 10, size: Math.random() * 2 + 1, vx: (Math.random() - 0.5) * 1.5, vy: (Math.random() - 0.5) * 1.5, life: 1.0, decay: Math.random() * 0.03 + 0.015 }
+          ctx.fillStyle = `rgba(0, 255, 170, ${tp.life})`
+          ctx.shadowBlur = 8; ctx.shadowColor = 'rgba(0, 255, 170, 1)'
+          ctx.beginPath(); ctx.arc(tp.x, tp.y, tp.size, 0, Math.PI * 2); ctx.fill()
+          tp.x += tp.vx; tp.y += tp.vy; tp.life -= tp.decay
+        }
+      }
+
+      // Terrain accent
+      ctx.shadowBlur = 0
+      for (let l = 0; l < 5; l++) {
+        const depth = l / 5
+        ctx.strokeStyle = `rgba(0, 255, 170, ${0.03 + depth * 0.08})`
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        for (let x = 0; x <= canvas.width; x += 25) {
+          const y = canvas.height * 0.75 + l * 20 + Math.sin(x * 0.006 + step + l * 0.5) * (12 * depth)
+          if (x === 0) ctx.moveTo(x, y)
+          else ctx.lineTo(x, y)
+        }
+        ctx.stroke()
+      }
+
+      // Helix strands
+      const helixAmplitude = canvas.width < 768 ? 45 : 90
+      ctx.shadowBlur = 10; ctx.shadowColor = 'rgba(0, 255, 170, 0.5)'
+      ctx.strokeStyle = 'rgba(0, 255, 170, 0.45)'; ctx.lineWidth = 2
+      ctx.beginPath()
+      for (let x = 0; x <= canvas.width; x += 8) {
+        const y = cy - 35 + Math.sin(x * 0.004 + step) * helixAmplitude + Math.cos(x * 0.012 - step * 1.2) * 20
+        if (x === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
+      ctx.shadowColor = 'rgba(0, 206, 209, 0.5)'; ctx.strokeStyle = 'rgba(0, 206, 209, 0.4)'; ctx.lineWidth = 1.8
+      ctx.beginPath()
+      for (let x = 0; x <= canvas.width; x += 8) {
+        const y = cy + 35 + Math.cos(x * 0.004 - step) * helixAmplitude + Math.sin(x * 0.01 + step * 1.2) * 20
+        if (x === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
+
+      // Beacon nodes
+      beaconNodes.forEach(node => {
+        const rx = node.x * canvas.width; const ry = node.y * canvas.height
+        const pulse = (Math.sin(step * 2 + node.offset) + 1) / 2
+        ctx.fillStyle = `rgba(0, 255, 170, ${(0.2 + pulse * 0.8) * 0.25})`
+        ctx.beginPath(); ctx.arc(rx, ry, node.size * (1 + pulse * 2.5) * 3, 0, Math.PI * 2); ctx.fill()
+        ctx.shadowBlur = 15 * pulse; ctx.shadowColor = 'rgba(0, 255, 170, 1)'
+        ctx.fillStyle = `rgba(0, 255, 170, ${0.2 + pulse * 0.8})`
+        ctx.beginPath(); ctx.arc(rx, ry, node.size, 0, Math.PI * 2); ctx.fill()
+        ctx.shadowBlur = 0
+      })
+
+      requestAnimationFrame(draw)
+    }
+    requestAnimationFrame(draw)
+
+    return () => {
+      window.removeEventListener('resize', resize)
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseleave', handleMouseLeave)
+    }
+  }, [])
+
+  return <canvas ref={canvasRef} className="fixed inset-0 w-full h-full pointer-events-none z-0" />
+}
+
+// Browser Web Speech API — instant local STT, no server processing
+function browserSpeechToText(language: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      reject(new Error('SpeechRecognition not supported'))
+      return
+    }
+    const recognition = new SpeechRecognition()
+    recognition.lang = language === 'sw' ? 'sw-TZ' : 'en-US'
+    recognition.continuous = false
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+    recognition.timeout = 15000
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript
+      if (transcript && transcript.trim()) {
+        resolve(transcript)
+      } else {
+        resolve('')
+      }
+    }
+    recognition.onerror = (event: any) => {
+      console.log(`[STT Error]: ${event.error}`)
+      if (event.error === 'no-speech' || event.error === 'aborted') {
+        resolve('')
+      } else if (event.error === 'network') {
+        reject(new Error('Network error'))
+      } else {
+        reject(new Error(event.error))
+      }
+    }
+    recognition.onend = () => {}
+    recognition.start()
+  })
+}
+
+// Improved: retry with longer wait on empty results
+async function captureVoice(language: string, retries: number = 3): Promise<string> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const result = await browserSpeechToText(language)
+      if (result && result.trim()) {
+        return result
+      }
+    } catch (e) {
+      console.log(`[STT Capture attempt ${attempt + 1} failed]:`, e)
+    }
+    await new Promise(r => setTimeout(r, 2000))
+  }
+  return ''
+}
+
 export default function App() {
   const [systemMode, setSystemMode] = useState<'personal' | 'business'>('business')
   const [activeTab, setActiveTab] = useState('visualizer')
@@ -95,46 +289,17 @@ export default function App() {
     }, 6000)
     
     try {
-      const data = await api.voiceChat(undefined, language)
-
+      // Use browser Web Speech API for instant STT (no server audio processing)
+      const userQuery = await captureVoice(language)
       clearTimeout(thinkingTimeout)
 
       if (!handsFreeRef.current) {
         isLoopRunningRef.current = false
         return
       }
-
-      if (data.approval_id) {
-        setPendingApproval({ id: data.approval_id, tool: 'requested tool' })
-      }
-
-      // Check if rate limited by backend
-      if (data.is_rate_limited) {
-        addLog(`[SYSTEM]: API Rate limit hit. Deactivating hands-free mode.`, 'warn')
-        
-        const replyToShow = data.reply.includes('|') ? data.reply.split('|')[0].trim() : data.reply
-        addLog(`[NYOTA] (Voice): "${replyToShow}"`, 'success')
-        
-        const spokenText = data.reply.includes('|') ? data.reply.split('|')[1].trim() : data.reply
-        const wordCount = spokenText.split(' ').length
-        const speakingDuration = Math.max(2500, wordCount * 380 + 500)
-        
-        handleSetState('speaking')
-        setHandsFree(false)
-        isLoopRunningRef.current = false
-        
-        speakingTimeoutRef.current = setTimeout(() => {
-          speakingTimeoutRef.current = null
-          handleSetState('idle')
-        }, speakingDuration)
-        return
-      }
-      
-      // Check if silence was detected by backend
-      if (data.is_silence || (!data.user_query && !data.reply)) {
+if (!userQuery || userQuery.trim() === '') {
         const inactiveMs = Date.now() - lastActiveRef.current
         const sixtyMinutes = 60 * 60 * 1000
-        
         if (inactiveMs > sixtyMinutes) {
           addLog(`[SYSTEM]: Inactivity timeout reached (60 min). Deactivating hands-free mode.`, 'info')
           setHandsFree(false)
@@ -142,49 +307,72 @@ export default function App() {
           isLoopRunningRef.current = false
           return
         }
-        
-        // Loop again after a brief pause
+        addLog(`[STT]: No speech detected, retrying in 3s...`, 'warn')
         isLoopRunningRef.current = false
         setTimeout(() => {
           if (handsFreeRef.current) {
             runVoiceLoop()
           }
-        }, 300)
+        }, 3000)
+        return
+      }
+      // Send text to /api/chat for AI response (Ollama/Gemini)
+      const data = await api.sendMessage(userQuery, undefined, language)
+
+      if (data.approval_id) {
+        setPendingApproval({ id: data.approval_id, tool: 'requested tool' })
+      }
+
+      // Check if rate limited by backend
+      if (data.is_rate_limited || data.reply.includes('API quota limit')) {
+        addLog(`[SYSTEM]: API Rate limit hit. Deactivating hands-free mode.`, 'warn')
+        const replyToShow = data.reply.includes('|') ? data.reply.split('|')[0].trim() : data.reply
+        addLog(`[NYOTA] (Voice): "${replyToShow}"`, 'success')
+        const spokenText = data.reply.includes('|') ? data.reply.split('|')[1].trim() : data.reply
+        const wordCount = spokenText.split(' ').length
+        const speakingDuration = Math.max(2500, wordCount * 380 + 500)
+        handleSetState('speaking')
+        setHandsFree(false)
+        isLoopRunningRef.current = false
+        speakingTimeoutRef.current = setTimeout(() => {
+          speakingTimeoutRef.current = null
+          handleSetState('idle')
+        }, speakingDuration)
         return
       }
 
-      // If user actually spoke, reset the inactivity timer
       lastActiveRef.current = Date.now()
-      
-      // Update logs with transcription and voice response
-      addLog(`[USER] (Voice): "${data.user_query}"`, 'info')
-      setLiveSubtitle({ speaker: 'user', text: data.user_query })
-      
+
+      addLog(`[USER] (Voice): "${userQuery}"`, 'info')
+      setLiveSubtitle({ speaker: 'user', text: userQuery })
+
       const replyToShow = data.reply.includes('|') ? data.reply.split('|')[0].trim() : data.reply
       addLog(`[NYOTA] (Voice): "${replyToShow}"`, 'success')
       setLiveSubtitle({ speaker: 'nyota', text: replyToShow })
-      
-      // Calculate speaking duration dynamically based on spoken translation (English part after |)
+
       const spokenText = data.reply.includes('|') ? data.reply.split('|')[1].trim() : data.reply
       const wordCount = spokenText.split(' ').length
       const speakingDuration = Math.max(2500, wordCount * 380 + 500)
-      
+
       handleSetState('speaking')
-      
+
       isLoopRunningRef.current = false
       speakingTimeoutRef.current = setTimeout(() => {
         speakingTimeoutRef.current = null
-        if (handsFreeRef.current) {
-          runVoiceLoop()
-        } else {
-          handleSetState('idle')
-        }
+        // Wait extra 1.5s for pyttsx3 SAPI5 to fully stop before re-listening
+        setTimeout(() => {
+          if (handsFreeRef.current) {
+            runVoiceLoop()
+          } else {
+            handleSetState('idle')
+          }
+        }, 1500)
       }, speakingDuration)
 
     } catch {
       clearTimeout(thinkingTimeout)
       addLog(`[ERROR]: Failed to capture voice stream or query AI.`, 'error')
-      
+
       isLoopRunningRef.current = false
       setTimeout(() => {
         if (handsFreeRef.current) {
@@ -302,6 +490,7 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden cyber-grid">
+      <HologramBackground />
       <Header
         state={state}
         systemMode={systemMode}
@@ -323,7 +512,7 @@ export default function App() {
           />
         )}
 
-        <section className="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#04060b]">
+        <section className="flex-1 min-w-0 flex flex-col overflow-hidden relative z-10">
           {activeTab === 'visualizer' && viewMode === 'immersive' && (
             <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
               <ArcReactor

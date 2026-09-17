@@ -11,6 +11,7 @@ import PortfolioTab from './components/PortfolioTab/PortfolioTab'
 import EstimatorTab from './components/EstimatorTab/EstimatorTab'
 import LeadsTab from './components/LeadsTab/LeadsTab'
 import AuditorTab from './components/AuditorTab/AuditorTab'
+import CodeViewerModal from './components/CodeViewerModal/CodeViewerModal'
 import { api } from './lib/api'
 
 // Hologram background types
@@ -153,10 +154,67 @@ function HologramBackground() {
   return <canvas ref={canvasRef} className="fixed inset-0 w-full h-full pointer-events-none z-0" />
 }
 
+// Global reference for hardware/software echo cancellation stream
+let globalAudioStream: MediaStream | null = null
+
+async function ensureEchoCancellation(): Promise<void> {
+  if (globalAudioStream && globalAudioStream.active) return
+  try {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      globalAudioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
+    }
+  } catch (err) {
+    console.warn('[AEC]: Could not initialize echo cancellation stream:', err)
+  }
+}
+
+// Probes backend /api/tts-status to wait for SAPI5 to finish speaking
+async function waitForSpeechToFinish(maxWaitMs = 25000): Promise<void> {
+  // Give SAPI5 450ms to initialize and start speaking on DirectSound
+  await new Promise(r => setTimeout(r, 450))
+  const start = Date.now()
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const status = await api.getTtsStatus()
+      if (!status.is_speaking) {
+        break
+      }
+    } catch {
+      break
+    }
+    await new Promise(r => setTimeout(r, 200))
+  }
+  // 500ms cooldown buffer for acoustic room reverberation to settle before turning mic on
+  await new Promise(r => setTimeout(r, 500))
+}
+
+// Trap self-audio loopback (when speakers are loud and mic picks up Nyota's own words)
+function isAcousticEcho(userQuery: string, lastAssistantReply: string): boolean {
+  if (!userQuery || !lastAssistantReply) return false
+  const cleanU = userQuery.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()
+  const cleanA = lastAssistantReply.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()
+  if (!cleanU || !cleanA) return false
+
+  // If user query is exact match or contained inside what Nyota just said
+  if (cleanA.includes(cleanU) || cleanU.includes(cleanA)) return true
+
+  const uWords = cleanU.split(/\s+/).filter(w => w.length > 2)
+  if (uWords.length === 0) return false
+  const aWords = new Set(cleanA.split(/\s+/).filter(w => w.length > 2))
+  const overlap = uWords.filter(w => aWords.has(w)).length
+  return overlap / uWords.length >= 0.7
+}
+
 // Browser Web Speech API — instant local STT, no server processing
 function browserSpeechToText(language: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     if (!SpeechRecognition) {
       reject(new Error('SpeechRecognition not supported'))
       return
@@ -216,11 +274,37 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('split')
   const [autoView, setAutoView] = useState(false)
   const [pendingApproval, setPendingApproval] = useState<{ id: string; tool: string } | null>(null)
-  
+  const [codeViewer, setCodeViewer] = useState<{
+    isOpen: boolean
+    filename: string
+    code: string
+    language?: string
+    filePath?: string
+  }>({
+    isOpen: false,
+    filename: '',
+    code: '',
+    language: 'plaintext',
+  })
   const handsFreeRef = useRef(false)
   const lastActiveRef = useRef<number>(Date.now())
   const isLoopRunningRef = useRef(false)
   const speakingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastNyotaReplyRef = useRef<string>('')
+
+  const handleOpenCodeViewer = useCallback((filename: string, code: string, language: string, filePath?: string) => {
+    setCodeViewer({
+      isOpen: true,
+      filename,
+      code,
+      language,
+      filePath,
+    })
+  }, [])
+
+  const handleCloseCodeViewer = useCallback(() => {
+    setCodeViewer((prev) => ({ ...prev, isOpen: false }))
+  }, [])
 
   useEffect(() => {
     handsFreeRef.current = handsFree
@@ -289,6 +373,9 @@ export default function App() {
     }, 6000)
     
     try {
+      // Ensure browser acoustic echo cancellation is active
+      await ensureEchoCancellation()
+
       // Use browser Web Speech API for instant STT (no server audio processing)
       const userQuery = await captureVoice(language)
       clearTimeout(thinkingTimeout)
@@ -316,6 +403,19 @@ if (!userQuery || userQuery.trim() === '') {
         }, 3000)
         return
       }
+
+      // Check if captured audio is an acoustic echo of Nyota's own last reply
+      if (lastNyotaReplyRef.current && isAcousticEcho(userQuery, lastNyotaReplyRef.current)) {
+        addLog(`[VOICE]: Acoustic echo detected and filtered out.`, 'info')
+        isLoopRunningRef.current = false
+        setTimeout(() => {
+          if (handsFreeRef.current) {
+            runVoiceLoop()
+          }
+        }, 600)
+        return
+      }
+
       // Send text to /api/chat for AI response (Ollama/Gemini)
       const data = await api.sendMessage(userQuery, undefined, language)
 
@@ -324,20 +424,17 @@ if (!userQuery || userQuery.trim() === '') {
       }
 
       // Check if rate limited by backend
-      if (data.is_rate_limited || data.reply.includes('API quota limit')) {
+      if ((data as any).is_rate_limited || data.reply.includes('API quota limit')) {
         addLog(`[SYSTEM]: API Rate limit hit. Deactivating hands-free mode.`, 'warn')
         const replyToShow = data.reply.includes('|') ? data.reply.split('|')[0].trim() : data.reply
         addLog(`[NYOTA] (Voice): "${replyToShow}"`, 'success')
-        const spokenText = data.reply.includes('|') ? data.reply.split('|')[1].trim() : data.reply
-        const wordCount = spokenText.split(' ').length
-        const speakingDuration = Math.max(2500, wordCount * 380 + 500)
+        lastNyotaReplyRef.current = replyToShow
+
         handleSetState('speaking')
         setHandsFree(false)
+        await waitForSpeechToFinish()
+        handleSetState('idle')
         isLoopRunningRef.current = false
-        speakingTimeoutRef.current = setTimeout(() => {
-          speakingTimeoutRef.current = null
-          handleSetState('idle')
-        }, speakingDuration)
         return
       }
 
@@ -349,25 +446,19 @@ if (!userQuery || userQuery.trim() === '') {
       const replyToShow = data.reply.includes('|') ? data.reply.split('|')[0].trim() : data.reply
       addLog(`[NYOTA] (Voice): "${replyToShow}"`, 'success')
       setLiveSubtitle({ speaker: 'nyota', text: replyToShow })
-
-      const spokenText = data.reply.includes('|') ? data.reply.split('|')[1].trim() : data.reply
-      const wordCount = spokenText.split(' ').length
-      const speakingDuration = Math.max(2500, wordCount * 380 + 500)
+      lastNyotaReplyRef.current = replyToShow
 
       handleSetState('speaking')
 
+      // Real-time synchronization: probe /api/tts-status until SAPI5 finishes speaking
+      await waitForSpeechToFinish()
+
       isLoopRunningRef.current = false
-      speakingTimeoutRef.current = setTimeout(() => {
-        speakingTimeoutRef.current = null
-        // Wait extra 1.5s for pyttsx3 SAPI5 to fully stop before re-listening
-        setTimeout(() => {
-          if (handsFreeRef.current) {
-            runVoiceLoop()
-          } else {
-            handleSetState('idle')
-          }
-        }, 1500)
-      }, speakingDuration)
+      if (handsFreeRef.current) {
+        runVoiceLoop()
+      } else {
+        handleSetState('idle')
+      }
 
     } catch {
       clearTimeout(thinkingTimeout)
@@ -535,7 +626,7 @@ if (!userQuery || userQuery.trim() === '') {
                 handsFree={handsFree}
                 liveSubtitle={liveSubtitle}
               />
-              <TerminalLogs logs={logs}>
+              <TerminalLogs logs={logs} onViewCode={handleOpenCodeViewer} onNotify={addLog}>
                 <ApprovalPanel pendingApproval={pendingApproval} onApproval={handleApproval} />
                 <CommandInput onSubmit={handleSubmitPrompt} />
               </TerminalLogs>
@@ -543,7 +634,12 @@ if (!userQuery || userQuery.trim() === '') {
           )}
 
           {activeTab === 'visualizer' && viewMode === 'chat' && (
-            <TerminalLogs logs={logs} className="!w-full flex-1 !p-6 lg:!p-10">
+            <TerminalLogs
+              logs={logs}
+              className="!w-full flex-1 !p-6 lg:!p-10"
+              onViewCode={handleOpenCodeViewer}
+              onNotify={addLog}
+            >
               <ApprovalPanel pendingApproval={pendingApproval} onApproval={handleApproval} />
               <CommandInput onSubmit={handleSubmitPrompt} />
             </TerminalLogs>
@@ -557,6 +653,15 @@ if (!userQuery || userQuery.trim() === '') {
           {activeTab === 'diagram' && <DiagramTab />}
         </section>
       </main>
+
+      <CodeViewerModal
+        isOpen={codeViewer.isOpen}
+        onClose={handleCloseCodeViewer}
+        filename={codeViewer.filename}
+        code={codeViewer.code}
+        language={codeViewer.language}
+        filePath={codeViewer.filePath}
+      />
     </div>
   )
 }

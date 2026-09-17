@@ -1,5 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const API_KEY = import.meta.env.VITE_API_SECRET_KEY
+const API_KEY = import.meta.env.VITE_API_SECRET_KEY || 'nyota-dev-key-change-in-production'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers)
@@ -79,6 +79,9 @@ export const api = {
   interruptSpeech: () =>
     request<{ status: string }>('/api/interrupt', { method: 'POST' }),
 
+  getTtsStatus: () =>
+    request<{ is_speaking: boolean }>('/api/tts-status'),
+
   sendMessage: (message: string, conversationId?: string, language = 'en') =>
     request<ChatResponse>('/api/chat', {
       method: 'POST',
@@ -116,4 +119,37 @@ export const api = {
       method: 'DELETE',
       body: JSON.stringify({ path }),
     }),
+
+  executeTool: (tool: string, args: Record<string, any> = {}) =>
+    request<{ success: boolean; output: string; error?: string; file_path?: string; filename?: string }>(
+      '/api/tools/execute',
+      {
+        method: 'POST',
+        body: JSON.stringify({ tool, arguments: args }),
+      },
+    ),
+
+  saveFile: (path: string, content: string) =>
+    request<{ success: boolean; output: string; file_path?: string; filename?: string }>(
+      '/api/tools/execute',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          tool: 'write_file',
+          arguments: { path, content },
+        }),
+      },
+    ),
+
+  readFile: (path: string) =>
+    request<{ success: boolean; output: string; file_path?: string; filename?: string }>(
+      '/api/tools/execute',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          tool: 'read_file',
+          arguments: { path },
+        }),
+      },
+    ),
 }
